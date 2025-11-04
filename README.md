@@ -48,7 +48,8 @@ from phantomgen import create_nema, pet_nema_dict, earl_nema_dict
 act_vol, ct_vol = create_nema(
     matrix_size=(256, 256, 256),
     voxel_size_mm=(2.0, 2.0, 2.0),
-    nema_dict=pet_nema_dict
+    nema_dict=pet_nema_dict,
+    supersample=2,  # optional high-resolution phantom generation
 )
 
 np.save("activity.npy", act_vol)
@@ -71,10 +72,12 @@ Optional arguments:
 | `--voxel` | `2 2 2` | Voxel size (mm) |
 | `--out-act` | `activity.npy` | Output path for activity map |
 | `--out-ct` | `ctmu.npy` | Output path for CT μ-map |
+| `--supersample` | `1` | Optional supersampling factor (one value or three for Z Y X) |
 
 Example:
 ```bash
 phantomgen --preset earl --z 192 --y 192 --x 192 --voxel 2.5 2.5 2.5
+phantomgen --preset pet --supersample 3
 ```
 
 ---
@@ -143,7 +146,8 @@ plt.show()
 phantomgen/
 ├─ src/phantomgen/core.py       # Core implementation
 ├─ src/phantomgen/__init__.py   # Public API
-├─ tests/test_basic.py          # Minimal tests
+├─ tests/test_basic.py          # Smoke tests
+├─ tests/test_downsampling.py   # Supersampling regression tests
 ├─ pyproject.toml
 └─ README.md
 ```
