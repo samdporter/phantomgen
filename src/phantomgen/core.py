@@ -142,7 +142,8 @@ def add_sphere(volume, voxel_size_mm, radius_mm, center_mm=(0, 0, 0), value=1):
 def create_nema(
     matrix_size=(256, 256, 256),              # (Z,Y,X)
     voxel_size_mm=(2.0, 2.0, 2.0),
-    nema_dict=None
+    nema_dict=None,
+    center_offset_mm=None
 ):
     """
     Create a 3D numerical phantom matching the IEC/NEMA IQ body phantom geometry.
@@ -178,6 +179,13 @@ def create_nema(
             }
         }
 
+        The dictionary may also include:
+            "center_offset_mm": (cz, cy, cx)   # global shift in mm
+
+    center_offset_mm : tuple (cz, cy, cx) or None
+        Optional explicit global offset applied to every primitive (mm).
+        Overrides any value present in `nema_dict` when provided.
+
     Returns
     -------
     act_vol, ct_vol : np.ndarray
@@ -194,13 +202,14 @@ def create_nema(
         },
         "activity_concentration_background": 0.05,
         "include_lung_insert": True,
+        "center_offset_mm": (0.0, 0.0, 0.0),
         "sphere_dict": {
             "ring_R": 57,
             "ring_z": -37,
             "spheres": {
                 "diametre_mm": [10,13,17,22,28,37],
                 "angle_loc":   [30,90,150,210,270,330],
-                "act_conc_MBq_ml": [0.00,0.00,0.4,0.4,0.4,0.4],
+            "act_conc_MBq_ml": [0.00,0.00,0.4,0.4,0.4,0.4],
             }
         }
     }
@@ -219,6 +228,18 @@ def create_nema(
                     d.setdefault(k, v)
             return d
         nema_dict = deep_update(copy.deepcopy(nema_dict), defaults)
+
+    # --- global offset ---
+    default_offset = defaults.get("center_offset_mm", (0.0, 0.0, 0.0))
+    dict_offset = nema_dict.get("center_offset_mm", default_offset)
+    if center_offset_mm is None:
+        center_offset_mm = dict_offset
+
+    offset_z, offset_y, offset_x = map(float, center_offset_mm)
+
+    def with_offset(center):
+        cz, cy, cx = center
+        return (cz + offset_z, cy + offset_y, cx + offset_x)
 
     # --- unpack parameters ---
     act_conc_backgr = nema_dict["activity_concentration_background"]
@@ -244,9 +265,9 @@ def create_nema(
     back_MBq_per_vox = act_conc_backgr * ml_per_vox
 
     # --- connecting box ---
-    add_box(ctac_vol,  voxel_size_mm, (220, 75, 150), (0, 72.5, 0), value=perspex_mu_value)
-    add_box(ctac_vol,  voxel_size_mm, (214, 72, 150), (0, 71, 0), value=fill_mu_value)
-    add_box(act_vol, voxel_size_mm, (214, 72, 150), (0, 71, 0), value=back_MBq_per_vox)
+    add_box(ctac_vol,  voxel_size_mm, (220, 75, 150), with_offset((0, 72.5, 0)), value=perspex_mu_value)
+    add_box(ctac_vol,  voxel_size_mm, (214, 72, 150), with_offset((0, 71, 0)), value=fill_mu_value)
+    add_box(act_vol, voxel_size_mm, (214, 72, 150), with_offset((0, 71, 0)), value=back_MBq_per_vox)
 
     # --- tank structure ---
     tanks = [
@@ -262,13 +283,13 @@ def create_nema(
 
     for t in tanks:
         if t["mu"] == "perspex":
-            add_cylinder(ctac_vol, voxel_size_mm, t["r"], t["h"], t["deg"], t["c"], perspex_mu_value)
+            add_cylinder(ctac_vol, voxel_size_mm, t["r"], t["h"], t["deg"], with_offset(t["c"]), perspex_mu_value)
         elif t["mu"] == "fill":
-            add_cylinder(ctac_vol, voxel_size_mm, t["r"], t["h"], t["deg"], t["c"], fill_mu_value)
-            add_cylinder(act_vol, voxel_size_mm, t["r"], t["h"], t["deg"], t["c"], back_MBq_per_vox)
+            add_cylinder(ctac_vol, voxel_size_mm, t["r"], t["h"], t["deg"], with_offset(t["c"]), fill_mu_value)
+            add_cylinder(act_vol, voxel_size_mm, t["r"], t["h"], t["deg"], with_offset(t["c"]), back_MBq_per_vox)
         else:
-            add_cylinder(ctac_vol, voxel_size_mm, t["r"], t["h"], t["deg"], t["c"], lung_mu_value)
-            add_cylinder(act_vol, voxel_size_mm, t["r"], t["h"], t["deg"], t["c"], 0)
+            add_cylinder(ctac_vol, voxel_size_mm, t["r"], t["h"], t["deg"], with_offset(t["c"]), lung_mu_value)
+            add_cylinder(act_vol, voxel_size_mm, t["r"], t["h"], t["deg"], with_offset(t["c"]), 0)
 
     # --- add spheres ---
     for d, a, c in zip(
@@ -281,9 +302,9 @@ def create_nema(
         ang = np.deg2rad(a)
         cy, cx = -ring_R * np.sin(ang), ring_R * np.cos(ang)
         fill_act = c * ml_per_vox
-        add_sphere(ctac_vol, voxel_size_mm, r_shell, (z_pos, cy, cx), value=perspex_mu_value)
-        add_sphere(ctac_vol, voxel_size_mm, r_interior, (z_pos, cy, cx), value=fill_mu_value)
-        add_sphere(act_vol, voxel_size_mm, r_interior, (z_pos, cy, cx), value=fill_act)
+        add_sphere(ctac_vol, voxel_size_mm, r_shell, with_offset((z_pos, cy, cx)), value=perspex_mu_value)
+        add_sphere(ctac_vol, voxel_size_mm, r_interior, with_offset((z_pos, cy, cx)), value=fill_mu_value)
+        add_sphere(act_vol, voxel_size_mm, r_interior, with_offset((z_pos, cy, cx)), value=fill_act)
 
     return act_vol, ctac_vol
 
@@ -347,13 +368,21 @@ def cli():
                    metavar=("sz","sy","sx"), help="Voxel size in mm")
     p.add_argument("--out-act", default="activity.npy", help="Output path for activity volume")
     p.add_argument("--out-ct",  default="ctmu.npy",     help="Output path for CT mu-map")
+    p.add_argument("--offset", type=float, nargs=3, default=[0.0, 0.0, 0.0],
+                   metavar=("cz","cy","cx"), help="Global offset (mm) applied to every primitive")
     args = p.parse_args()
 
     matrix_size = (args.z, args.y, args.x)
     voxel_mm = tuple(args.voxel)
     preset = pet_nema_dict if args.preset == "pet" else earl_nema_dict
 
-    act, ct = create_nema(matrix_size=matrix_size, voxel_size_mm=voxel_mm, nema_dict=preset)
+    offset_mm = tuple(args.offset)
+    act, ct = create_nema(
+        matrix_size=matrix_size,
+        voxel_size_mm=voxel_mm,
+        nema_dict=preset,
+        center_offset_mm=offset_mm
+    )
     np.save(args.out_act, act)
     np.save(args.out_ct, ct)
     print(f"Saved:\n  {args.out_act}  (shape {act.shape}, dtype {act.dtype})\n  {args.out_ct}   (shape {ct.shape}, dtype {ct.dtype})")
