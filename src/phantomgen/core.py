@@ -1,4 +1,5 @@
 import numpy as np
+import argparse
 
 
 def _normalize_supersample(factors):
@@ -83,94 +84,47 @@ def add_cylinder(volume, voxel_size_mm, radius_mm, height_mm, deg_range, center_
     """
     Fill a cylindrical region (optionally sector-shaped) in-place.
 
-    Assumptions
-    -----------
-    - Volume axes: (Z, Y, X)
-    - Cylinder axis: Z
-    - Angles measured CCW in XY plane (0° = +X).
+def _world_coords(shape, voxel_mm, center_mm):
+    """Return world coordinates (mm) for voxel centers with a given center shift."""
+    z, y, x = [np.arange(n, dtype=float) for n in shape]
+    Z, Y, X = np.meshgrid(z, y, x, indexing="ij")
+    sz, sy, sx = voxel_mm
+    cz, cy, cx = center_mm
+    Z = (Z - (shape[0]-1)/2) * sz - cz
+    Y = (Y - (shape[1]-1)/2) * sy - cy
+    X = (X - (shape[2]-1)/2) * sx - cx
+    return Z, Y, X
 
-    Parameters
-    ----------
-    volume : np.ndarray
-        Target 3D array to modify in-place.
-    voxel_size_mm : tuple (sz, sy, sx)
-        Physical voxel size in mm.
-    radius_mm : float
-        Cylinder radius in mm.
-    height_mm : float
-        Cylinder height along Z in mm.
-    deg_range : tuple(start_deg, end_deg) or None
-        Angular span in degrees. None or full 360 for complete cylinder.
-    center_mm : tuple (cz, cy, cx)
-        Center of the cylinder in world coordinates (mm).
-    value : scalar
-        Value assigned inside the region.
-    """
-    assert volume.ndim == 3
-    Zmm, Ymm, Xmm = _world_coords(volume.shape, voxel_size_mm, center_mm)
-    mask = (np.abs(Zmm) <= height_mm / 2.0) & ((Xmm**2 + Ymm**2) <= radius_mm**2)
+def add_box(volume, voxel_mm, size_mm, center_mm, value):
+    """Solid axis-aligned box centered at center_mm."""
+    Z, Y, X = _world_coords(volume.shape, voxel_mm, center_mm)
+    dz, dy, dx = [s/2 for s in size_mm]
+    mask = (np.abs(Z) <= dz) & (np.abs(Y) <= dy) & (np.abs(X) <= dx)
+    volume[mask] = value
 
+def add_cylinder(volume, voxel_mm, radius_mm, height_mm, deg_range, center_mm, value):
+    """Z-axis cylinder (optionally angularly clipped). deg_range=(start,end) in degrees or None."""
+    Z, Y, X = _world_coords(volume.shape, voxel_mm, center_mm)
+    mask = (np.abs(Z) <= height_mm/2) & ((X**2 + Y**2) <= radius_mm**2)
     if deg_range is not None:
         s, e = (deg_range[0] % 360.0, deg_range[1] % 360.0)
         span = (e - s) % 360.0
         if span and abs(span - 360.0) > 1e-9:
-            theta = np.degrees(np.arctan2(Ymm, Xmm)) % 360.0
-            ang_ok = (theta >= s) & (theta <= e) if s <= e else ((theta >= s) | (theta <= e))
-            mask &= ang_ok
-
+            theta = np.degrees(np.arctan2(Y, X)) % 360.0
+            mask &= (theta >= s) & (theta <= e) if s <= e else ((theta >= s) | (theta <= e))
     volume[mask] = value
-    return volume
 
+def add_sphere(volume, voxel_mm, radius_mm, center_mm, value):
+    Z, Y, X = _world_coords(volume.shape, voxel_mm, center_mm)
+    mask = (X**2 + Y**2 + Z**2) <= radius_mm**2
+    volume[mask] = value
 
-def add_box(volume, voxel_size_mm, size_mm, center_mm=(0, 0, 0), rotation_deg=0.0, value=1):
-    """
-    Fill a rectangular box (cuboid) in-place, optionally rotated about Z.
+# --------------------------- Phantom builder ---------------------------
 
-    Parameters
-    ----------
-    volume : np.ndarray
-        Target 3D array (Z,Y,X).
-    voxel_size_mm : tuple (sz, sy, sx)
-        Physical voxel size in mm.
-    size_mm : tuple (height_z, size_y, size_x)
-        Box dimensions in mm.
-    center_mm : tuple (cz, cy, cx)
-        Box center in world coordinates (mm).
-    rotation_deg : float
-        In-plane rotation about Z-axis in degrees (CCW).
-    value : scalar
-        Value assigned inside the box.
-    """
-    assert volume.ndim == 3
-    Zmm, Ymm, Xmm = _world_coords(volume.shape, voxel_size_mm, center_mm)
-    if rotation_deg % 360:
-        th = np.deg2rad(rotation_deg)
-        c, s = np.cos(th), np.sin(th)
-        Xp, Yp = c * Xmm + s * Ymm, -s * Xmm + c * Ymm
-    else:
-        Xp, Yp = Xmm, Ymm
-    hz, hy, hx = (size_mm[0]/2, size_mm[1]/2, size_mm[2]/2)
-    inside = (np.abs(Xp) <= hx) & (np.abs(Yp) <= hy) & (np.abs(Zmm) <= hz)
-    volume[inside] = value
-    return volume
-
-
-def add_sphere(volume, voxel_size_mm, radius_mm, center_mm=(0, 0, 0), value=1):
-    """
-    Fill a spherical region in-place.
-
-    Parameters
-    ----------
-    volume : np.ndarray
-        Target 3D array (Z,Y,X).
-    voxel_size_mm : tuple (sz, sy, sx)
-        Physical voxel size in mm.
-    radius_mm : float
-        Sphere radius in mm.
-    center_mm : tuple (cz, cy, cx)
-        Sphere center in world coordinates (mm).
-    value : scalar
-        Value assigned inside the sphere.
+def create_nema(matrix_size=(256, 256, 256),
+                voxel_size_mm=(2.0, 2.0, 2.0),
+                nema_dict=None,
+                center_offset_mm=None):
     """
     assert volume.ndim == 3
     Zmm, Ymm, Xmm = _world_coords(volume.shape, voxel_size_mm, center_mm)
@@ -266,59 +220,28 @@ def create_nema(
         "include_lung_insert": True,
         "center_offset_mm": (0.0, 0.0, 0.0),
         "sphere_dict": {
-            "ring_R": 57,
-            "ring_z": -37,
+            "ring_R": 57, "ring_z": -37,
             "spheres": {
-                "diametre_mm": [10,13,17,22,28,37],
-                "angle_loc":   [30,90,150,210,270,330],
-            "act_conc_MBq_ml": [0.00,0.00,0.4,0.4,0.4,0.4],
+                "diametre_mm":     [10, 13, 17, 22, 28, 37],
+                "angle_loc":       [30, 90, 150, 210, 270, 330],
+                "act_conc_MBq_ml": [0.00, 0.00, 0.04, 0.04, 0.04, 0.04]
             }
-        }
+        },
+        "center_offset_mm": (0.0, 0.0, 0.0),
+    }
+    pet_nema_dict = {
+        **earl_nema_dict,
+        "activity_concentration_background": 0.00,  # PET style blank background (as in your file)
     }
 
-    # --- merge user input with defaults ---
-    if nema_dict is None:
-        nema_dict = defaults
-    else:
-        # recursively update nested dicts
-        import copy
-        def deep_update(d, u):
-            for k, v in u.items():
-                if isinstance(v, dict):
-                    d[k] = deep_update(d.get(k, {}), v)
-                else:
-                    d.setdefault(k, v)
-            return d
-        nema_dict = deep_update(copy.deepcopy(nema_dict), defaults)
+    cfg = pet_nema_dict if (nema_dict == "pet") else (nema_dict or earl_nema_dict)
+    # allow CLI or dict-provided offset; CLI wins if provided
+    offset = tuple(center_offset_mm) if center_offset_mm is not None else tuple(cfg.get("center_offset_mm", (0.0, 0.0, 0.0)))
+    cz, cy, cx = offset
 
-    # --- global offset ---
-    default_offset = defaults.get("center_offset_mm", (0.0, 0.0, 0.0))
-    dict_offset = nema_dict.get("center_offset_mm", default_offset)
-    if center_offset_mm is None:
-        center_offset_mm = dict_offset
-
-    offset_z, offset_y, offset_x = map(float, center_offset_mm)
-
-    def with_offset(center):
-        cz, cy, cx = center
-        return (cz + offset_z, cy + offset_y, cx + offset_x)
-
-    # --- unpack parameters ---
-    act_conc_backgr = nema_dict["activity_concentration_background"]
-    fill_mu_value = nema_dict["mu_values"]["fill_mu_value"]
-    perspex_mu_value = nema_dict["mu_values"]["perspex_mu_value"]
-    lung_insert = nema_dict["include_lung_insert"]
-    lung_mu_value = nema_dict["mu_values"]["lung_mu_value"]
-
-    sphere_info = nema_dict["sphere_dict"]
-    ring_R = sphere_info["ring_R"]
-    z_pos = sphere_info["ring_z"]
-
-    # --- volume size check ---
-    vol_dim = [m * v for m, v in zip(matrix_size, voxel_size_mm)]
-    if any(v < lim for v, lim in zip(vol_dim, (220, 300, 230))):
-        print("❌ Volume smaller than NEMA phantom dimensions!")
-        return
+    # Convenient local alias
+    def with_off(c):  # (cz, cy, cx) + local center (z,y,x)
+        return (c[0] + cz, c[1] + cy, c[2] + cx)
 
     ctac_vol = np.zeros(working_matrix, np.float32)
     act_vol = np.zeros(working_matrix, np.float32)
@@ -331,19 +254,25 @@ def create_nema(
     add_box(ctac_vol,  working_voxel, (214, 72, 150), with_offset((0, 71, 0)), value=fill_mu_value)
     add_box(act_vol, working_voxel, (214, 72, 150), with_offset((0, 71, 0)), value=back_MBq_per_vox)
 
-    # --- tank structure ---
+    # ---------------- Tank structure ----------------
+    # Outer shell/fill + two side cylinders + optional lung
     tanks = [
-        dict(r=150, h=220, deg=(180, 360), c=(0, 35, 0), mu="perspex"),
-        dict(r=147, h=214, deg=(180, 360), c=(0, 35, 0), mu="fill"),
-        dict(r=75,  h=220, deg=(90, 180),  c=(0, 35, -75), mu="perspex"),
-        dict(r=72,  h=214, deg=(90, 180),  c=(0, 35, -75), mu="fill"),
-        dict(r=75,  h=220, deg=(0, 90),    c=(0, 35, 75), mu="perspex"),
-        dict(r=72,  h=214, deg=(0, 90),    c=(0, 35, 75), mu="fill"),
+        dict(r=150, h=220, deg=(180, 360), c=(0, 35, 0),    mu="perspex"),
+        dict(r=147, h=214, deg=(180, 360), c=(0, 35, 0),    mu="fill"),
+        dict(r=75,  h=220, deg=(90, 180),  c=(0, 35, -75),  mu="perspex"),
+        dict(r=72,  h=214, deg=(90, 180),  c=(0, 35, -75),  mu="fill"),
+        dict(r=75,  h=220, deg=(0, 90),    c=(0, 35, 75),   mu="perspex"),
+        dict(r=72,  h=214, deg=(0, 90),    c=(0, 35, 75),   mu="fill"),
     ]
     if lung_insert:
         tanks.append(dict(r=25, h=214, deg=None, c=(0, 0, 0), mu="lung"))
 
+    # One small connector box (perspex)
+    add_box(ctac_vol, voxel_size_mm, size_mm=(220, 75, 150), center_mm=with_off((0, 72.5, 0)), value=perspex_mu_value)
+
+    # Paint cylinders
     for t in tanks:
+        center = with_off(t["c"])
         if t["mu"] == "perspex":
             add_cylinder(ctac_vol, working_voxel, t["r"], t["h"], t["deg"], with_offset(t["c"]), perspex_mu_value)
         elif t["mu"] == "fill":
@@ -374,59 +303,11 @@ def create_nema(
 
     return act_vol, ctac_vol
 
+# --------------------------- CLI ---------------------------
 
-earl_nema_dict = {
-    "mu_values":{
-        "perspex_mu_value": 0.15,
-        "fill_mu_value": 0.14,
-        "lung_mu_value": 0.043
-    },
-    "activity_concentration_background": 0.05,
-    "include_lung_insert": False,
-    "sphere_dict": {
-        "ring_R": 57,
-        "ring_z": -37,
-        "spheres": {
-            "diametre_mm": [13,17,22,28,37,60],
-            "angle_loc":   [270,150,30,90,330,210],
-            "act_conc_MBq_ml": [2.0,2.0,2.0,2.0,2.0,2.0],
-        }
-    }
-}
-
-
-pet_nema_dict = {
-    "mu_values":{
-        "perspex_mu_value": 0.1,
-        "fill_mu_value": 0.096,
-        "lung_mu_value": 0.029
-    },
-    "activity_concentration_background": 0.05,
-    "include_lung_insert": True,
-    "sphere_dict": {
-        "ring_R": 57,
-        "ring_z": -37,
-        "spheres": {
-            "diametre_mm": [10,13,17,22,28,37],
-            "angle_loc":   [30,90,150,210,270,330],
-            "act_conc_MBq_ml": [0.00,0.00,0.4,0.4,0.4,0.4],
-        }
-    }
-}
-
-# ... your code exactly as provided above ...
-
-def cli():
-    """
-    CLI to write activity and CT volumes to .npy files.
-    Examples:
-      phantomgen --preset pet --out-act act.npy --out-ct ct.npy
-      phantomgen --preset earl --z 256 --y 256 --x 256 --voxel 2 2 2
-    """
-    import argparse, numpy as np
-
-    p = argparse.ArgumentParser(prog="phantomgen", description="Generate IEC/NEMA phantoms")
-    p.add_argument("--preset", choices=["pet", "earl"], default="pet", help="Parameter set")
+def _build_parser():
+    p = argparse.ArgumentParser(description="Build NEMA-like phantom and save ACT/CTAC volumes (.npy).")
+    p.add_argument("--preset", choices=["earl", "pet"], default="earl", help="Parameter preset")
     p.add_argument("--z", type=int, default=256)
     p.add_argument("--y", type=int, default=256)
     p.add_argument("--x", type=int, default=256)
@@ -448,7 +329,6 @@ def cli():
 
     matrix_size = (args.z, args.y, args.x)
     voxel_mm = tuple(args.voxel)
-    preset = pet_nema_dict if args.preset == "pet" else earl_nema_dict
 
     if len(args.supersample) == 1:
         supersample = args.supersample[0]
@@ -467,4 +347,7 @@ def cli():
     )
     np.save(args.out_act, act)
     np.save(args.out_ct, ct)
-    print(f"Saved:\n  {args.out_act}  (shape {act.shape}, dtype {act.dtype})\n  {args.out_ct}   (shape {ct.shape}, dtype {ct.dtype})")
+    print(f"Saved:\n  {args.out_act}  (shape {act.shape}, dtype {act.dtype})\n  {args.out_ct}  (shape {ct.shape}, dtype {ct.dtype})")
+
+if __name__ == "__main__":
+    main()

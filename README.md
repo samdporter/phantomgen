@@ -1,5 +1,3 @@
-# phantomgen 🧩  
-**Virtual NEMA / IEC Nuclear Medicine Phantom Generator**
 
 `phantomgen` is a lightweight Python package that generates realistic 3D numerical phantoms for Nuclear Medicine imaging simulations and dosimetry research.  
 It implements the IEC Body Phantom (NEMA NU-2 / IQ) geometry and provides parameter sets matching **EARL** and **PET** standard configurations.
