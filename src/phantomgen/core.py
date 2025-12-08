@@ -316,8 +316,10 @@ def create_nema(
     # --- volume size check ---
     vol_dim = [m * v for m, v in zip(matrix_size, voxel_size_mm)]
     if any(v < lim for v, lim in zip(vol_dim, (220, 300, 230))):
-        print("❌ Volume smaller than NEMA phantom dimensions!")
-        return
+        print("⚠️  Warning: Volume smaller than NEMA phantom dimensions!")
+        print("   Minimum required size (mm): Z=220, Y=300, X=230")
+        print(f"   Current volume size (mm):    Z={vol_dim[0]:.1f}, Y={vol_dim[1]:.1f}, X={vol_dim[2]:.1f}")
+        print("   Phantom may be truncated at FoV boundaries.")
 
     ctac_vol = np.zeros(working_matrix, np.float32)
     act_vol = np.zeros(working_matrix, np.float32)
