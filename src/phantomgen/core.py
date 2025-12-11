@@ -44,6 +44,49 @@ def _downsample_volume(volume, factors, reduce="mean"):
         raise ValueError("reduce must be either 'mean' or 'sum'.")
     return reduced.astype(volume.dtype, copy=False)
 
+
+def _normalize_supersample(factors):
+    """
+    Ensure supersampling factors are a length-3 tuple of positive integers.
+    """
+    if isinstance(factors, int):
+        normalized = (factors, factors, factors)
+    elif isinstance(factors, (tuple, list)):
+        if len(factors) != 3:
+            raise ValueError("Supersample sequence must have exactly three elements.")
+        normalized = tuple(int(f) for f in factors)
+    else:
+        raise TypeError("Supersample must be an int or a sequence of three ints.")
+
+    if any(f < 1 for f in normalized):
+        raise ValueError("Supersample factors must be >= 1.")
+
+    return normalized
+
+
+def _downsample_volume(volume, factors, reduce="mean"):
+    """
+    Downsample a 3D volume by integer factors along each axis.
+    """
+    if volume.ndim != 3:
+        raise ValueError("Expected a 3D volume to downsample.")
+
+    zf, yf, xf = factors
+    Z, Y, X = volume.shape
+    if (Z % zf) or (Y % yf) or (X % xf):
+        raise ValueError(
+            f"Volume shape {volume.shape} is not divisible by factors {factors}."
+        )
+
+    reshaped = volume.reshape(Z // zf, zf, Y // yf, yf, X // xf, xf)
+    if reduce == "mean":
+        reduced = reshaped.mean(axis=(1, 3, 5))
+    elif reduce == "sum":
+        reduced = reshaped.sum(axis=(1, 3, 5))
+    else:
+        raise ValueError("reduce must be either 'mean' or 'sum'.")
+    return reduced.astype(volume.dtype, copy=False)
+
 # ===============================================================
 # ===  HELPER: Generate centered world coordinates for a volume ===
 # ===============================================================
@@ -194,7 +237,19 @@ def create_nema(
     act_vol, ct_vol : np.ndarray
         Activity and CT μ-map volumes (same shape).
     """
-    import numpy as np
+
+    supersample = _normalize_supersample(supersample)
+    use_supersample = supersample != (1, 1, 1)
+
+    matrix_size = tuple(int(m) for m in matrix_size)
+    voxel_size_mm = tuple(float(v) for v in voxel_size_mm)
+
+    if use_supersample:
+        working_matrix = tuple(int(m * f) for m, f in zip(matrix_size, supersample))
+        working_voxel = tuple(float(v) / f for v, f in zip(voxel_size_mm, supersample))
+    else:
+        working_matrix = matrix_size
+        working_voxel = voxel_size_mm
 
     supersample = _normalize_supersample(supersample)
     use_supersample = supersample != (1, 1, 1)
@@ -234,14 +289,51 @@ def create_nema(
         "activity_concentration_background": 0.00,  # PET style blank background (as in your file)
     }
 
-    cfg = pet_nema_dict if (nema_dict == "pet") else (nema_dict or earl_nema_dict)
-    # allow CLI or dict-provided offset; CLI wins if provided
-    offset = tuple(center_offset_mm) if center_offset_mm is not None else tuple(cfg.get("center_offset_mm", (0.0, 0.0, 0.0)))
-    cz, cy, cx = offset
+    # --- merge user input with defaults ---
+    if nema_dict is None:
+        nema_dict = defaults
+    else:
+        # recursively update nested dicts
+        import copy
+        def deep_update(d, u):
+            for k, v in u.items():
+                if isinstance(v, dict):
+                    d[k] = deep_update(d.get(k, {}), v)
+                else:
+                    d.setdefault(k, v)
+            return d
+        nema_dict = deep_update(copy.deepcopy(nema_dict), defaults)
 
-    # Convenient local alias
-    def with_off(c):  # (cz, cy, cx) + local center (z,y,x)
-        return (c[0] + cz, c[1] + cy, c[2] + cx)
+    # --- global offset ---
+    default_offset = defaults.get("center_offset_mm", (0.0, 0.0, 0.0))
+    dict_offset = nema_dict.get("center_offset_mm", default_offset)
+    if center_offset_mm is None:
+        center_offset_mm = dict_offset
+
+    offset_z, offset_y, offset_x = map(float, center_offset_mm)
+
+    def with_offset(center):
+        cz, cy, cx = center
+        return (cz + offset_z, cy + offset_y, cx + offset_x)
+
+    # --- unpack parameters ---
+    act_conc_backgr = nema_dict["activity_concentration_background"]
+    fill_mu_value = nema_dict["mu_values"]["fill_mu_value"]
+    perspex_mu_value = nema_dict["mu_values"]["perspex_mu_value"]
+    lung_insert = nema_dict["include_lung_insert"]
+    lung_mu_value = nema_dict["mu_values"]["lung_mu_value"]
+
+    sphere_info = nema_dict["sphere_dict"]
+    ring_R = sphere_info["ring_R"]
+    z_pos = sphere_info["ring_z"]
+
+    # --- volume size check ---
+    vol_dim = [m * v for m, v in zip(matrix_size, voxel_size_mm)]
+    if any(v < lim for v, lim in zip(vol_dim, (220, 300, 230))):
+        print("⚠️  Warning: Volume smaller than NEMA phantom dimensions!")
+        print("   Minimum required size (mm): Z=220, Y=300, X=230")
+        print(f"   Current volume size (mm):    Z={vol_dim[0]:.1f}, Y={vol_dim[1]:.1f}, X={vol_dim[2]:.1f}")
+        print("   Phantom may be truncated at FoV boundaries.")
 
     ctac_vol = np.zeros(working_matrix, np.float32)
     act_vol = np.zeros(working_matrix, np.float32)
