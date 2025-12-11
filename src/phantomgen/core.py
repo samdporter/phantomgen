@@ -302,7 +302,7 @@ def create_nema(
         r_shell = (d + 2) / 2.0
         r_interior = d / 2.0
         ang = np.deg2rad(a)
-        cy = ring_y + ring_R * np.sin(ang)
+        cy = ring_y + ring_R * -np.sin(ang)
         cx = ring_x + ring_R * np.cos(ang)
         cz = ring_z
         fill_act = c * ml_per_vox
