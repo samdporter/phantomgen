@@ -279,9 +279,6 @@ def create_nema(
     if lung_insert:
         tanks.append(dict(r=25, h=214, deg=None, c=(0, 0, 0), mu="lung"))
 
-    # One small connector box (perspex)
-    add_box(ctac_vol, working_voxel, size_mm=(220, 75, 150), center_mm=with_offset((0, 72.5, 0)), value=perspex_mu_value)
-
     # Paint cylinders
     for t in tanks:
         center = with_offset(t["c"])
