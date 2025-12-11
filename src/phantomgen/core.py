@@ -1,3 +1,6 @@
+import numbers
+import warnings
+
 import numpy as np
 import argparse
 
@@ -6,12 +9,22 @@ def _normalize_supersample(factors):
     """
     Ensure supersampling factors are a length-3 tuple of positive integers.
     """
-    if isinstance(factors, int):
-        normalized = (factors, factors, factors)
+    # Allow scalar integral types (including numpy integer dtypes)
+    if isinstance(factors, numbers.Integral):
+        normalized = (int(factors), int(factors), int(factors))
     elif isinstance(factors, (tuple, list)):
         if len(factors) != 3:
             raise ValueError("Supersample sequence must have exactly three elements.")
-        normalized = tuple(int(f) for f in factors)
+
+        # Validate that all elements are integral and coerce explicitly
+        normalized = []
+        for f in factors:
+            if not isinstance(f, numbers.Integral):
+                raise TypeError(
+                    f"Supersample factors must be integers; got {type(f).__name__} ({f!r})."
+                )
+            normalized.append(int(f))
+        normalized = tuple(normalized)
     else:
         raise TypeError("Supersample must be an int or a sequence of three ints.")
 
@@ -37,49 +50,14 @@ def _downsample_volume(volume, factors, reduce="mean"):
 
     reshaped = volume.reshape(Z // zf, zf, Y // yf, yf, X // xf, xf)
     if reduce == "mean":
-        reduced = reshaped.mean(axis=(1, 3, 5))
-    elif reduce == "sum":
-        reduced = reshaped.sum(axis=(1, 3, 5))
-    else:
-        raise ValueError("reduce must be either 'mean' or 'sum'.")
-    return reduced.astype(volume.dtype, copy=False)
-
-
-def _normalize_supersample(factors):
-    """
-    Ensure supersampling factors are a length-3 tuple of positive integers.
-    """
-    if isinstance(factors, int):
-        normalized = (factors, factors, factors)
-    elif isinstance(factors, (tuple, list)):
-        if len(factors) != 3:
-            raise ValueError("Supersample sequence must have exactly three elements.")
-        normalized = tuple(int(f) for f in factors)
-    else:
-        raise TypeError("Supersample must be an int or a sequence of three ints.")
-
-    if any(f < 1 for f in normalized):
-        raise ValueError("Supersample factors must be >= 1.")
-
-    return normalized
-
-
-def _downsample_volume(volume, factors, reduce="mean"):
-    """
-    Downsample a 3D volume by integer factors along each axis.
-    """
-    if volume.ndim != 3:
-        raise ValueError("Expected a 3D volume to downsample.")
-
-    zf, yf, xf = factors
-    Z, Y, X = volume.shape
-    if (Z % zf) or (Y % yf) or (X % xf):
-        raise ValueError(
-            f"Volume shape {volume.shape} is not divisible by factors {factors}."
-        )
-
-    reshaped = volume.reshape(Z // zf, zf, Y // yf, yf, X // xf, xf)
-    if reduce == "mean":
+        # For integer-typed volumes, computing a mean and casting back would silently
+        # truncate fractional values. Raise instead to avoid surprising results.
+        if np.issubdtype(volume.dtype, np.integer):
+            raise ValueError(
+                f"Mean downsampling is not supported for integer dtype volumes "
+                f"(got dtype={volume.dtype!r}). Cast to a float dtype first or use "
+                f"reduce='sum'."
+            )
         reduced = reshaped.mean(axis=(1, 3, 5))
     elif reduce == "sum":
         reduced = reshaped.sum(axis=(1, 3, 5))
@@ -123,20 +101,6 @@ def _world_coords(shape, voxel_mm, center_mm):
 # ===============================================================
 # ===  BASIC GEOMETRIC PRIMITIVES (CYLINDER, BOX, SPHERE)       ===
 # ===============================================================
-def add_cylinder(volume, voxel_size_mm, radius_mm, height_mm, deg_range, center_mm, value=1):
-    """
-    Fill a cylindrical region (optionally sector-shaped) in-place.
-
-def _world_coords(shape, voxel_mm, center_mm):
-    """Return world coordinates (mm) for voxel centers with a given center shift."""
-    z, y, x = [np.arange(n, dtype=float) for n in shape]
-    Z, Y, X = np.meshgrid(z, y, x, indexing="ij")
-    sz, sy, sx = voxel_mm
-    cz, cy, cx = center_mm
-    Z = (Z - (shape[0]-1)/2) * sz - cz
-    Y = (Y - (shape[1]-1)/2) * sy - cy
-    X = (X - (shape[2]-1)/2) * sx - cx
-    return Z, Y, X
 
 def add_box(volume, voxel_mm, size_mm, center_mm, value):
     """Solid axis-aligned box centered at center_mm."""
@@ -161,20 +125,6 @@ def add_sphere(volume, voxel_mm, radius_mm, center_mm, value):
     Z, Y, X = _world_coords(volume.shape, voxel_mm, center_mm)
     mask = (X**2 + Y**2 + Z**2) <= radius_mm**2
     volume[mask] = value
-
-# --------------------------- Phantom builder ---------------------------
-
-def create_nema(matrix_size=(256, 256, 256),
-                voxel_size_mm=(2.0, 2.0, 2.0),
-                nema_dict=None,
-                center_offset_mm=None):
-    """
-    assert volume.ndim == 3
-    Zmm, Ymm, Xmm = _world_coords(volume.shape, voxel_size_mm, center_mm)
-    inside = (Xmm**2 + Ymm**2 + Zmm**2) <= radius_mm**2
-    volume[inside] = value
-    return volume
-
 
 # ===============================================================
 # ===  NEMA NU 2 / IEC BODY PHANTOM CREATOR                    ===
@@ -251,43 +201,9 @@ def create_nema(
         working_matrix = matrix_size
         working_voxel = voxel_size_mm
 
-    supersample = _normalize_supersample(supersample)
-    use_supersample = supersample != (1, 1, 1)
-
-    matrix_size = tuple(int(m) for m in matrix_size)
-    voxel_size_mm = tuple(float(v) for v in voxel_size_mm)
-
-    if use_supersample:
-        working_matrix = tuple(int(m * f) for m, f in zip(matrix_size, supersample))
-        working_voxel = tuple(float(v) / f for v, f in zip(voxel_size_mm, supersample))
-    else:
-        working_matrix = matrix_size
-        working_voxel = voxel_size_mm
-
     # --- defaults ---
-    defaults = {
-        "mu_values":{
-            "perspex_mu_value": 0.1,
-            "fill_mu_value": 0.096,
-            "lung_mu_value": 0.029
-        },
-        "activity_concentration_background": 0.05,
-        "include_lung_insert": True,
-        "center_offset_mm": (0.0, 0.0, 0.0),
-        "sphere_dict": {
-            "ring_R": 57, "ring_z": -37,
-            "spheres": {
-                "diametre_mm":     [10, 13, 17, 22, 28, 37],
-                "angle_loc":       [30, 90, 150, 210, 270, 330],
-                "act_conc_MBq_ml": [0.00, 0.00, 0.04, 0.04, 0.04, 0.04]
-            }
-        },
-        "center_offset_mm": (0.0, 0.0, 0.0),
-    }
-    pet_nema_dict = {
-        **earl_nema_dict,
-        "activity_concentration_background": 0.00,  # PET style blank background (as in your file)
-    }
+    from .presets import pet_nema_dict
+    defaults = pet_nema_dict.copy()
 
     # --- merge user input with defaults ---
     if nema_dict is None:
@@ -330,10 +246,14 @@ def create_nema(
     # --- volume size check ---
     vol_dim = [m * v for m, v in zip(matrix_size, voxel_size_mm)]
     if any(v < lim for v, lim in zip(vol_dim, (220, 300, 230))):
-        print("⚠️  Warning: Volume smaller than NEMA phantom dimensions!")
-        print("   Minimum required size (mm): Z=220, Y=300, X=230")
-        print(f"   Current volume size (mm):    Z={vol_dim[0]:.1f}, Y={vol_dim[1]:.1f}, X={vol_dim[2]:.1f}")
-        print("   Phantom may be truncated at FoV boundaries.")
+        warnings.warn(
+            f"Volume smaller than NEMA phantom dimensions! "
+            f"Minimum required size (mm): Z=220, Y=300, X=230. "
+            f"Current volume size (mm): Z={vol_dim[0]:.1f}, Y={vol_dim[1]:.1f}, X={vol_dim[2]:.1f}. "
+            f"Phantom may be truncated at FoV boundaries.",
+            UserWarning,
+            stacklevel=2
+        )
 
     ctac_vol = np.zeros(working_matrix, np.float32)
     act_vol = np.zeros(working_matrix, np.float32)
@@ -360,11 +280,11 @@ def create_nema(
         tanks.append(dict(r=25, h=214, deg=None, c=(0, 0, 0), mu="lung"))
 
     # One small connector box (perspex)
-    add_box(ctac_vol, voxel_size_mm, size_mm=(220, 75, 150), center_mm=with_off((0, 72.5, 0)), value=perspex_mu_value)
+    add_box(ctac_vol, working_voxel, size_mm=(220, 75, 150), center_mm=with_offset((0, 72.5, 0)), value=perspex_mu_value)
 
     # Paint cylinders
     for t in tanks:
-        center = with_off(t["c"])
+        center = with_offset(t["c"])
         if t["mu"] == "perspex":
             add_cylinder(ctac_vol, working_voxel, t["r"], t["h"], t["deg"], with_offset(t["c"]), perspex_mu_value)
         elif t["mu"] == "fill":
@@ -422,18 +342,25 @@ def _build_parser():
     matrix_size = (args.z, args.y, args.x)
     voxel_mm = tuple(args.voxel)
 
-    if len(args.supersample) == 1:
-        supersample = args.supersample[0]
-    elif len(args.supersample) == 3:
-        supersample = tuple(args.supersample)
-    else:
-        p.error("--supersample expects one value or three values (z y x).")
+    # Delegate to _normalize_supersample for consistency
+    try:
+        if len(args.supersample) == 1:
+            supersample = _normalize_supersample(args.supersample[0])
+        elif len(args.supersample) == 3:
+            supersample = _normalize_supersample(tuple(args.supersample))
+        else:
+            p.error("--supersample expects one value or three values (z y x).")
+    except (ValueError, TypeError) as e:
+        p.error(f"Invalid --supersample: {e}")
 
+    from .presets import earl_nema_dict, pet_nema_dict
+    preset_dict = earl_nema_dict if args.preset == "earl" else pet_nema_dict
+    
     offset_mm = tuple(args.offset)
     act, ct = create_nema(
         matrix_size=matrix_size,
         voxel_size_mm=voxel_mm,
-        nema_dict=preset,
+        nema_dict=preset_dict,
         center_offset_mm=offset_mm,
         supersample=supersample,
     )
@@ -442,4 +369,4 @@ def _build_parser():
     print(f"Saved:\n  {args.out_act}  (shape {act.shape}, dtype {act.dtype})\n  {args.out_ct}  (shape {ct.shape}, dtype {ct.dtype})")
 
 if __name__ == "__main__":
-    main()
+    _build_parser()
