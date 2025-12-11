@@ -241,7 +241,9 @@ def create_nema(
 
     sphere_info = nema_dict["sphere_dict"]
     ring_R = sphere_info["ring_R"]
-    z_pos = sphere_info["ring_z"]
+    ring_x = sphere_info.get("ring_x", 0)
+    ring_y = sphere_info.get("ring_y", 0)
+    ring_z = sphere_info["ring_z"]
 
     # --- volume size check ---
     vol_dim = [m * v for m, v in zip(matrix_size, voxel_size_mm)]
@@ -300,11 +302,13 @@ def create_nema(
         r_shell = (d + 2) / 2.0
         r_interior = d / 2.0
         ang = np.deg2rad(a)
-        cy, cx = -ring_R * np.sin(ang), ring_R * np.cos(ang)
+        cy = ring_y + ring_R * np.sin(ang)
+        cx = ring_x + ring_R * np.cos(ang)
+        cz = ring_z
         fill_act = c * ml_per_vox
-        add_sphere(ctac_vol, working_voxel, r_shell, with_offset((z_pos, cy, cx)), value=perspex_mu_value)
-        add_sphere(ctac_vol, working_voxel, r_interior, with_offset((z_pos, cy, cx)), value=fill_mu_value)
-        add_sphere(act_vol, working_voxel, r_interior, with_offset((z_pos, cy, cx)), value=fill_act)
+        add_sphere(ctac_vol, working_voxel, r_shell, with_offset((cz, cy, cx)), value=perspex_mu_value)
+        add_sphere(ctac_vol, working_voxel, r_interior, with_offset((cz, cy, cx)), value=fill_mu_value)
+        add_sphere(act_vol, working_voxel, r_interior, with_offset((cz, cy, cx)), value=fill_act)
 
     if use_supersample:
         act_vol = _downsample_volume(act_vol, supersample, reduce="sum")

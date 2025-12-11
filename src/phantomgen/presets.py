@@ -8,8 +8,11 @@ earl_nema_dict = {
     },
     "activity_concentration_background": 0.0,
     "include_lung_insert": False,
+    "center_offset_mm": (0.0, 0.0, 0.0),
     "sphere_dict": {
         "ring_R": 57,
+        "ring_x": 0,
+        "ring_y": 0,
         "ring_z": -37,
         "spheres": {
             "diametre_mm": [13, 17, 22, 28, 37, 60],
@@ -27,8 +30,11 @@ pet_nema_dict = {
     },
     "activity_concentration_background": 0.05,
     "include_lung_insert": True,
+    "center_offset_mm": (0.0, 0.0, 0.0),
     "sphere_dict": {
         "ring_R": 57,
+        "ring_x": 0,
+        "ring_y": 0,
         "ring_z": -37,
         "spheres": {
             "diametre_mm": [10, 13, 17, 22, 28, 37],
