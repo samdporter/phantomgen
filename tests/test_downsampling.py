@@ -2,9 +2,96 @@ import numpy as np
 import pytest
 
 from phantomgen import create_nema
-from phantomgen.core import _downsample_volume
+from phantomgen.core import _downsample_volume, _normalize_supersample
 from phantomgen.presets import pet_nema_dict
 
+
+# ===============================================================
+# Tests for _normalize_supersample
+# ===============================================================
+
+def test_normalize_supersample_scalar_int():
+    assert _normalize_supersample(2) == (2, 2, 2)
+    assert _normalize_supersample(1) == (1, 1, 1)
+    assert _normalize_supersample(5) == (5, 5, 5)
+
+
+def test_normalize_supersample_tuple():
+    assert _normalize_supersample((1, 2, 3)) == (1, 2, 3)
+    assert _normalize_supersample((2, 2, 2)) == (2, 2, 2)
+
+
+def test_normalize_supersample_list():
+    assert _normalize_supersample([1, 2, 3]) == (1, 2, 3)
+    assert _normalize_supersample([3, 3, 3]) == (3, 3, 3)
+
+
+def test_normalize_supersample_numpy_int():
+    assert _normalize_supersample(np.int32(2)) == (2, 2, 2)
+    assert _normalize_supersample(np.int64(3)) == (3, 3, 3)
+
+
+def test_normalize_supersample_invalid_length():
+    with pytest.raises(ValueError, match="exactly three elements"):
+        _normalize_supersample((1, 2))
+    with pytest.raises(ValueError, match="exactly three elements"):
+        _normalize_supersample([1, 2, 3, 4])
+
+
+def test_normalize_supersample_invalid_type():
+    with pytest.raises(TypeError, match="must be an int or a sequence"):
+        _normalize_supersample(2.5)
+    with pytest.raises(TypeError, match="must be an int or a sequence"):
+        _normalize_supersample("2")
+
+
+def test_normalize_supersample_non_integral_elements():
+    with pytest.raises(TypeError, match="must be integers"):
+        _normalize_supersample((1, 2.5, 3))
+    with pytest.raises(TypeError, match="must be integers"):
+        _normalize_supersample([1, "2", 3])
+
+
+def test_normalize_supersample_negative_or_zero():
+    with pytest.raises(ValueError, match="must be >= 1"):
+        _normalize_supersample(0)
+    with pytest.raises(ValueError, match="must be >= 1"):
+        _normalize_supersample((1, 0, 3))
+    with pytest.raises(ValueError, match="must be >= 1"):
+        _normalize_supersample((-1, 2, 3))
+
+
+# ===============================================================
+# Tests for _downsample_volume error handling
+# ===============================================================
+
+def test_downsample_volume_invalid_dimensions():
+    volume_2d = np.zeros((10, 10), dtype=np.float32)
+    with pytest.raises(ValueError, match="Expected a 3D volume"):
+        _downsample_volume(volume_2d, (2, 2, 2))
+
+
+def test_downsample_volume_non_divisible_shape():
+    volume = np.zeros((10, 10, 10), dtype=np.float32)
+    with pytest.raises(ValueError, match="not divisible by factors"):
+        _downsample_volume(volume, (3, 3, 3))
+
+
+def test_downsample_volume_integer_dtype_mean():
+    volume = np.zeros((10, 10, 10), dtype=np.int32)
+    with pytest.raises(ValueError, match="Mean downsampling is not supported for integer dtype"):
+        _downsample_volume(volume, (2, 2, 2), reduce="mean")
+
+
+def test_downsample_volume_invalid_reduce_method():
+    volume = np.zeros((10, 10, 10), dtype=np.float32)
+    with pytest.raises(ValueError, match="reduce must be either 'mean' or 'sum'"):
+        _downsample_volume(volume, (2, 2, 2), reduce="median")
+
+
+# ===============================================================
+# Phantom generation and downsampling tests
+# ===============================================================
 
 def _make_phantom(matrix_size, voxel_size_mm, supersample):
     return create_nema(

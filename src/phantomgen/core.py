@@ -201,19 +201,6 @@ def create_nema(
         working_matrix = matrix_size
         working_voxel = voxel_size_mm
 
-    supersample = _normalize_supersample(supersample)
-    use_supersample = supersample != (1, 1, 1)
-
-    matrix_size = tuple(int(m) for m in matrix_size)
-    voxel_size_mm = tuple(float(v) for v in voxel_size_mm)
-
-    if use_supersample:
-        working_matrix = tuple(int(m * f) for m, f in zip(matrix_size, supersample))
-        working_voxel = tuple(float(v) / f for v, f in zip(voxel_size_mm, supersample))
-    else:
-        working_matrix = matrix_size
-        working_voxel = voxel_size_mm
-
     # --- defaults ---
     from .presets import pet_nema_dict
     defaults = pet_nema_dict.copy()
@@ -382,4 +369,4 @@ def _build_parser():
     print(f"Saved:\n  {args.out_act}  (shape {act.shape}, dtype {act.dtype})\n  {args.out_ct}  (shape {ct.shape}, dtype {ct.dtype})")
 
 if __name__ == "__main__":
-    main()
+    _build_parser()
